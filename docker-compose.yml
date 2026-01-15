@@ -1,0 +1,67 @@
+version: "3.8"
+
+services:
+  # ---------------------------------------------------------------------------
+  # 1. Web Service (FastAPI)
+  # ---------------------------------------------------------------------------
+  web:
+    build: .
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    volumes:
+      - ./app:/app/app # Hot-reloading for code
+      - shared_data:/app/storage # Shared volume for files
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://user:password@db:5432/docx_db
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - STORAGE_PATH=/app/storage
+    depends_on:
+      - db
+      - redis
+
+  # ---------------------------------------------------------------------------
+  # 2. Worker Service (Celery)
+  # ---------------------------------------------------------------------------
+  worker:
+    build: .
+    # Starts the Celery worker with INFO log level
+    command: celery -A app.celery_worker.celery_app worker --loglevel=info
+    volumes:
+      - ./app:/app/app # Hot-reloading for code
+      - shared_data:/app/storage # SAME shared volume so worker sees the files
+    environment:
+      - DATABASE_URL=postgresql://user:password@db:5432/docx_db
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - STORAGE_PATH=/app/storage
+    depends_on:
+      - db
+      - redis
+
+  # ---------------------------------------------------------------------------
+  # 3. Database (PostgreSQL)
+  # ---------------------------------------------------------------------------
+  db:
+    image: postgres:15-alpine
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_USER=user
+      - POSTGRES_PASSWORD=password
+      - POSTGRES_DB=docx_db
+    ports:
+      - "5432:5432" # Exposed for local debugging tools (like DBeaver)
+
+  # ---------------------------------------------------------------------------
+  # 4. Message Queue (Redis)
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+volumes:
+  postgres_data: # Persist DB data between restarts
+  shared_data: # Persist uploaded files and PDFs
