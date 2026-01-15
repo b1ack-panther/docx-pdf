@@ -24,10 +24,8 @@ class Job(Base):
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     finished_at = Column(DateTime, nullable=True)
     
-    # Path to the final zipped output relative to the shared storage root
     zip_path = Column(String, nullable=True)
 
-    # Relationship to individual files
     files = relationship("JobFile", back_populates="job", cascade="all, delete-orphan")
 
 class JobFile(Base):

@@ -1,146 +1,117 @@
 # Bulk DOCX-to-PDF Conversion Service
 
-A robust, asynchronous microservice designed to handle high-volume batch conversions of DOCX files to PDF. Built with FastAPI, Celery, Redis, and PostgreSQL, completely containerized for easy deployment.
+Asynchronous microservice for batch conversion of DOCX files to PDF. Built with FastAPI, Celery, Redis, and PostgreSQL.
 
-## 🚀 Overview
+## Overview
 
-This service addresses the challenge of converting large batches (e.g., 1,000+ files) of documents without blocking clients or timing out.
+This service handles large batches of document conversions asynchronously to avoid blocking the API or causing timeouts.
 
-### Key Features:
+### Features
 
-- **Asynchronous Processing**: Uses a message queue to handle file conversion in the background.
-- **Scalable Architecture**: Separation of API (producer) and Worker (consumer) allows independent scaling.
-- **Race Condition Handling**: Implements Celery Chords to ensure the final ZIP archive is created only after all individual files are processed.
-- **Fault Tolerance**: Retry logic and status tracking per individual file; one bad file does not fail the whole job.
-- **Dockerized**: Runs the entire stack (API, Worker, DB, Redis) with a single command.
+- **Asynchronous Processing**: Background file conversion via Celery.
+- **Scalable**: API and Workers can be scaled independently.
+- **Reliable**: Uses Celery Chords to finalize jobs only after all conversions are complete.
+- **Fault Tolerant**: Tracks status per file; individual failures do not stop the entire job.
+- **Dockerized**: Full environment setup with Docker Compose.
 
-## 🛠 Tech Stack
+## Tech Stack
 
-- **API**: Python 3.11 + FastAPI
-- **Worker**: Celery (Distributed Task Queue)
+- **API**: FastAPI
+- **Worker**: Celery
 - **Broker**: Redis
-- **Database**: PostgreSQL (Stores Job and File state)
-- **Conversion Engine**: LibreOffice (Headless mode)
-- **Containerization**: Docker & Docker Compose
+- **Database**: PostgreSQL
+- **Engine**: LibreOffice (Headless)
+- **Containerization**: Docker
 
-## 🏗 Architecture
+## Architecture
 
-1. **Client uploads a ZIP file** to `POST /jobs`.
-2. **API saves the ZIP** to a shared Docker volume and offloads the "Processing" task to Celery. Returns a Job ID immediately.
-3. **Job Processor (Async Task)** unzips the file, creates DB records for every file, and triggers a Celery Chord.
-4. **Conversion Workers (Parallel)** pick up individual files and convert them using LibreOffice.
-5. **Archiver (Callback)** triggers automatically once all conversion tasks finish, zipping the PDFs and marking the job as COMPLETED.
+1. Client uploads a ZIP file to `POST /jobs`.
+2. API saves the file and offloads processing to Celery, returning a Job ID immediately.
+3. A background task unzips files and schedules individual conversion tasks.
+4. Workers convert each file to PDF in parallel.
+5. A final callback task zips the results and marks the job as COMPLETED.
 
-## 🏃 Getting Started
+## Getting Started
 
 ### Prerequisites
 
 - Docker
 - Docker Compose
 
-### Installation & Running
+### Running the Service
 
-1. **Clone the repository**:
+1. Clone the repository:
 
    ```bash
-   git clone <repository-url>
-   cd docx-to-pdf-service
+   git clone https://github.com/b1ack-panther/docx-pdf.git
+   cd docx-pdf
    ```
 
-2. **Start the stack**:
+2. Start the stack:
 
    ```bash
    docker-compose up --build
    ```
 
-   This will build the Python images (installing LibreOffice takes a moment) and spin up Postgres and Redis.
+3. Access API documentation:
+   http://localhost:8000/docs
 
-3. **Verify it's running**:
-   API docs are available at: http://localhost:8000/docs
+## Testing
 
-## 🧪 Testing
-
-The service includes a comprehensive test suite covering the API endpoints and background workers.
-
-**Run tests locally**:
+Run tests using pytest:
 
 ```bash
 pip install -r requirements.txt pytest httpx
 python -m pytest
 ```
 
-## 📖 API Reference
+## API Reference
 
 ### 1. Submit a Job
 
-Uploads a ZIP file containing DOCX documents.
-
 - **Endpoint**: `POST /api/v1/jobs`
-- **Body**: `multipart/form-data` with key `file` (must be a .zip).
+- **Body**: `multipart/form-data` (file: .zip)
 - **Response**:
   ```json
   {
-  	"job_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+  	"job_id": "...",
   	"status": "PENDING"
   }
   ```
 
 ### 2. Check Job Status
 
-Poll this endpoint to track progress.
-
 - **Endpoint**: `GET /api/v1/jobs/{job_id}`
-- **Response**:
-  ```json
-  {
-  	"job_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
-  	"status": "IN_PROGRESS",
-  	"files": [
-  		{ "filename": "doc1.docx", "status": "COMPLETED", "error": null },
-  		{ "filename": "doc2.docx", "status": "PENDING", "error": null }
-  	]
-  }
-  ```
 
 ### 3. Download Results
 
-Streams the final ZIP containing converted PDFs.
-
 - **Endpoint**: `GET /api/v1/jobs/{job_id}/download`
-- **Response**: Binary ZIP file.
 
-## 🧠 Design Decisions & Trade-offs
+## Design Decisions
 
-### Why LibreOffice?
+### LibreOffice
 
-While Python libraries like `docx2pdf` exist, they often require Microsoft Word installed (Windows only) or lack perfect formatting fidelity. LibreOffice Headless is the industry standard for reliable, formatting-preserved conversions in Linux/Docker environments.
+Used for high-fidelity conversions in Linux environments without requiring Microsoft Word.
 
-### Why Celery "Chords"?
+### Celery Chords
 
-A common pitfall in bulk processing is knowing when the job is finished.
+Ensures the final archive is created only when all sub-tasks succeed, preventing race conditions.
 
-- **Naive Approach**: Have every worker check the DB: "Am I the last one?" This leads to race conditions where two workers finish simultaneously and both try to finalize the job.
-- **My Approach (Chord)**: Celery handles this synchronization. The "Archive" task is a callback that the broker only executes after the group of conversion tasks has successfully returned. This guarantees data integrity.
+### Non-blocking API
 
-### Handling "Blocking" Operations
+The upload endpoint returns immediately after saving the file; all processing (unzipping, conversion) happens in the background to ensure responsiveness.
 
-The assignment requires handling 1,000+ files. Unzipping and inserting 1,000 DB records takes time.
-
-- **Decision**: The API endpoint (`POST /jobs`) does not unzip the file. It only saves the raw upload and returns.
-- **A background "Setup Task"** handles the unzipping and DB population. This ensures the API remains responsive under heavy load.
-
-## 📂 Project Structure
+## Project Structure
 
 ```plaintext
 ├── app/
-│   ├── main.py          # App entry point
-│   ├── tasks.py         # Celery tasks (Logic for Unzip, Convert, Archive)
-│   ├── celery_worker.py # Celery App config
-│   ├── models.py        # SQLAlchemy Database models
-│   ├── database.py      # DB Connection
-│   └── routers/         # API Route definitions
-├── Dockerfile           # Unified image for API and Worker
-├── docker-compose.yml   # Infrastructure orchestration
-└── requirements.txt     # Python dependencies
+│   ├── main.py          # Entry point
+│   ├── tasks.py         # Celery tasks
+│   ├── celery_worker.py # Celery configuration
+│   ├── models.py        # Database models
+│   ├── database.py      # DB connection
+│   └── routers/         # API routes
+├── Dockerfile
+├── docker-compose.yml
+└── requirements.txt
 ```
-
